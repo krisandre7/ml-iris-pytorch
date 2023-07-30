@@ -106,10 +106,7 @@ class IrisDataset(Dataset):
             self.images[0] = img
 
         self.labels = labels
-        
-        # TODO:
-        # - Ordenar as imagens por label, aí cria um dict onde a chave é a label e o valor é 
-        #   uma lista de índices do self.images, a fim de ser usado no __get_item__.
+        self.class_num = len(labels)
         
         # get MNIST dataset
         # self.dataset = datasets.MNIST(root, train=train, download=download)
@@ -332,7 +329,15 @@ def main():
     files_train, labels_train = file_paths[train_indices], labels[train_indices]
     files_test, labels_test = file_paths[test_indices], labels[test_indices]
 
-    num_classes = np.unique(labels_train).shape[0]+1
+    # num_classes = np.unique(labels_train).shape[0]+1
+    
+    sort_index = np.argsort(labels_train)
+    labels_train = labels_train[sort_index]
+    files_train = files_train[sort_index]
+    
+    sort_index = np.argsort(labels_test)
+    labels_test = labels_test[sort_index]
+    files_test = files_test[sort_index]
     
     labels_train = torch.from_numpy(labels_train)
     labels_test = torch.from_numpy(labels_test)    
