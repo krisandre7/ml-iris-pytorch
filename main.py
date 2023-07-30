@@ -9,11 +9,18 @@ import torch.nn.functional as F
 from torch.nn.modules.module import Module
 import torch.optim as optim
 import torchvision
+from torchvision.io import ImageReadMode
+import torchvision.transforms as transforms
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import Optimizer
 from torchvision import datasets
 from torchvision import transforms as T
 from torch.optim.lr_scheduler import StepLR
+
+import glob
+import os
+from sklearn.model_selection import StratifiedShuffleSplit
+from PIL import Image
 
 class ResnetBackbone(nn.Module):
     def __init__(self) -> None:
@@ -85,12 +92,27 @@ class SiameseNetwork(nn.Module):
         
         return output
 
-class APP_MATCHER(Dataset):
-    def __init__(self, root, train, download=False):
-        super(APP_MATCHER, self).__init__()
+class IrisDataset(Dataset):
+    def __init__(self, file_names: list[str], labels, final_height, final_width, 
+                 transform: transforms.Compose = transforms.Compose([transforms.ToTensor()])):
+        super(IrisDataset, self).__init__()
+        # Transformações usadas no dataset
+        size = len(file_names)
+        self.images = torch.empty([size, 1, final_height, final_width], dtype=torch.float32)
+        
+        for file_name in file_names:
+            img = Image.open(file_name)
+            img: torch.Tensor = transform(img)
+            self.images[0] = img
 
+        self.labels = labels
+        
+        # TODO:
+        # - Ordenar as imagens por label, aí cria um dict onde a chave é a label e o valor é 
+        #   uma lista de índices do self.images, a fim de ser usado no __get_item__.
+        
         # get MNIST dataset
-        self.dataset = datasets.MNIST(root, train=train, download=download)
+        # self.dataset = datasets.MNIST(root, train=train, download=download)
         
         # as `self.dataset.data`'s shape is (Nx28x28), where N is the number of
         # examples in MNIST dataset, a single example has the dimensions of
@@ -98,9 +120,10 @@ class APP_MATCHER(Dataset):
         # However, every example should have (CxWxH) dimensions where C is the number 
         # of channels to be passed to the network. As MNIST contains gray-scale images, 
         # we add an additional dimension to corresponds to the number of channels.
-        self.data = self.dataset.data.unsqueeze(1).clone()
+        
+        # self.data = self.dataset.data.unsqueeze(1).clone()
 
-        self.group_examples()
+        # self.group_examples()
 
     def group_examples(self):
         """
@@ -296,20 +319,43 @@ def main():
         train_kwargs.update(cuda_kwargs)
         test_kwargs.update(cuda_kwargs)
 
-    train_dataset = APP_MATCHER('../data', train=True, download=True)
-    test_dataset = APP_MATCHER('../data', train=False)
-    train_loader = torch.utils.data.DataLoader(train_dataset,**train_kwargs)
-    test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
+    DATASET_DIR = 'MMU-Iris-Database'
+    class_names = np.sort(np.array(next(os.walk(DATASET_DIR))[1], np.float32))
+    file_paths = np.sort(glob.glob(DATASET_DIR + '/*/*.bmp'))
+
+    labels = np.array([path.split('/')[1] for path in file_paths], np.float32)
+    labels -= 1
+    
+    splitter = StratifiedShuffleSplit(n_splits=1, train_size=0.6, test_size=0.4, random_state=args.seed)
+    train_indices, test_indices = next(splitter.split(file_paths, labels))
+    
+    files_train, labels_train = file_paths[train_indices], labels[train_indices]
+    files_test, labels_test = file_paths[test_indices], labels[test_indices]
+
+    num_classes = np.unique(labels_train).shape[0]+1
+    
+    labels_train = torch.from_numpy(labels_train)
+    labels_test = torch.from_numpy(labels_test)    
+    
+    FINAL_HEIGHT = 128
+    FINAL_WIDTH = 128
+    ds_transforms = transforms.Compose([transforms.Grayscale(num_output_channels=1), 
+                                        transforms.Resize((FINAL_HEIGHT, FINAL_WIDTH)),
+                                        transforms.ToTensor()])
+    train_dataset = IrisDataset(files_train, labels_train, FINAL_HEIGHT, FINAL_WIDTH, ds_transforms)
+    # test_dataset = IrisDataset(files_train, labels_train)
+    # train_loader = torch.utils.data.DataLoader(train_dataset,**train_kwargs)
+    # test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
     model = SiameseNetwork().to(device)
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
     loss_fn = nn.BCELoss()
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
-    for epoch in range(1, args.epochs + 1):
-        train_loop(train_loader, model, loss_fn, optimizer, device, **vars(args))
-        test_loop(test_loader, model, loss_fn, device)
-        scheduler.step()
+    # for epoch in range(1, args.epochs + 1):
+    #     train_loop(train_loader, model, loss_fn, optimizer, device, **vars(args))
+    #     test_loop(test_loader, model, loss_fn, device)
+    #     scheduler.step()
 
     if args.save_model:
         torch.save(model.state_dict(), "siamese_network.pt")
