@@ -93,8 +93,7 @@ class SiameseNetwork(nn.Module):
         return output
 
 class IrisDataset(Dataset):
-    def __init__(self, file_names: list[str], labels, final_height, final_width, 
-                 transform: transforms.Compose = transforms.Compose([transforms.ToTensor()])):
+    def __init__(self, file_names: list[str], labels: torch.Tensor, transform, rng, final_height, final_width):
         super(IrisDataset, self).__init__()
         # Transformações usadas no dataset
         size = len(file_names)
@@ -106,42 +105,20 @@ class IrisDataset(Dataset):
             self.images[0] = img
 
         self.labels = labels
-        self.class_num = len(labels)
+        self.classes = labels.unique()
+        img_index = np.arange(len(self.labels))
+        img_index = np.split(img_index, len(self.classes))
         
-        # get MNIST dataset
-        # self.dataset = datasets.MNIST(root, train=train, download=download)
+        self.image_dict = {
+            int(array.item()): index for index in img_index
+            for array in self.classes
+        }
         
-        # as `self.dataset.data`'s shape is (Nx28x28), where N is the number of
-        # examples in MNIST dataset, a single example has the dimensions of
-        # (28x28) for (WxH), where W and H are the width and the height of the image. 
-        # However, every example should have (CxWxH) dimensions where C is the number 
-        # of channels to be passed to the network. As MNIST contains gray-scale images, 
-        # we add an additional dimension to corresponds to the number of channels.
-        
-        # self.data = self.dataset.data.unsqueeze(1).clone()
+        self.rng = rng
 
-        # self.group_examples()
-
-    def group_examples(self):
-        """
-            To ease the accessibility of data based on the class, we will use `group_examples` to group 
-            examples based on class. 
-            
-            Every key in `grouped_examples` corresponds to a class in MNIST dataset. For every key in 
-            `grouped_examples`, every value will conform to all of the indices for the MNIST 
-            dataset examples that correspond to that key.
-        """
-
-        # get the targets from MNIST dataset
-        np_arr = np.array(self.dataset.targets.clone())
-        
-        # group examples based on class
-        self.grouped_examples = {}
-        for i in range(0,10):
-            self.grouped_examples[i] = np.where((np_arr==i))[0]
-    
+ 
     def __len__(self):
-        return self.data.shape[0]
+        return len(self.images)
     
     def __getitem__(self, index):
         """
@@ -159,32 +136,27 @@ class IrisDataset(Dataset):
         """
 
         # pick some random class for the first image
-        selected_class = random.randint(0, 9)
+        selected_class = self.rng.choice(self.classes)
 
         # pick a random index for the first image in the grouped indices based of the label
         # of the class
-        random_index_1 = random.randint(0, self.grouped_examples[selected_class].shape[0]-1)
         
-        # pick the index to get the first image
-        index_1 = self.grouped_examples[selected_class][random_index_1]
+        index_1 = self.rng.choice(self.image_dict[selected_class])
 
         # get the first image
-        image_1 = self.data[index_1].clone().float()
+        image_1 = self.images[index_1]
 
         # same class
         if index % 2 == 0:
             # pick a random index for the second image
-            random_index_2 = random.randint(0, self.grouped_examples[selected_class].shape[0]-1)
+            index_2 = self.rng.choice(self.image_dict[selected_class])
             
             # ensure that the index of the second image isn't the same as the first image
-            while random_index_2 == random_index_1:
-                random_index_2 = random.randint(0, self.grouped_examples[selected_class].shape[0]-1)
+            while index_2 == index_1:
+                index_2 = self.rng.choice(self.image_dict[selected_class])
             
-            # pick the index to get the second image
-            index_2 = self.grouped_examples[selected_class][random_index_2]
-
             # get the second image
-            image_2 = self.data[index_2].clone().float()
+            image_2 = self.images[index_2]
 
             # set the label for this example to be positive (1)
             target = torch.tensor(1, dtype=torch.float)
@@ -192,22 +164,18 @@ class IrisDataset(Dataset):
         # different class
         else:
             # pick a random class
-            other_selected_class = random.randint(0, 9)
+            other_selected_class = self.rng.choice(self.classes)
 
             # ensure that the class of the second image isn't the same as the first image
             while other_selected_class == selected_class:
-                other_selected_class = random.randint(0, 9)
+                other_selected_class = self.rng.choice(self.classes)
 
             
             # pick a random index for the second image in the grouped indices based of the label
             # of the class
-            random_index_2 = random.randint(0, self.grouped_examples[other_selected_class].shape[0]-1)
+            index_2 = self.rng.choice(self.image_dict[other_selected_class])
 
-            # pick the index to get the second image
-            index_2 = self.grouped_examples[other_selected_class][random_index_2]
-
-            # get the second image
-            image_2 = self.data[index_2].clone().float()
+            image_2 = self.images[index_2].clone().float()
 
             # set the label for this example to be negative (0)
             target = torch.tensor(0, dtype=torch.float)
@@ -271,10 +239,10 @@ def test_loop(test_loader: DataLoader, model: nn.Module, loss_fn: nn.Module, dev
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch Siamese network Example')
-    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
-                        help='input batch size for training (default: 64)')
-    parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                        help='input batch size for testing (default: 1000)')
+    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
+                        help='input batch size for training (default: 32)')
+    parser.add_argument('--test-batch-size', type=int, default=32, metavar='N',
+                        help='input batch size for testing (default: 32)')
     parser.add_argument('--epochs', type=int, default=14, metavar='N',
                         help='number of epochs to train (default: 14)')
     parser.add_argument('--lr', type=float, default=1.0, metavar='LR',
@@ -289,7 +257,7 @@ def main():
                         help='quickly check a single pass')
     parser.add_argument('--seed', type=int, default=42, metavar='S',
                         help=f'random seed (default: 42)')
-    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+    parser.add_argument('--log-interval', type=int, default=4, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--save-model', action='store_true', default=False,
                         help='For Saving the current Model')
@@ -342,25 +310,26 @@ def main():
     labels_train = torch.from_numpy(labels_train)
     labels_test = torch.from_numpy(labels_test)    
     
+    rng = np.random.default_rng(args.seed)
     FINAL_HEIGHT = 128
     FINAL_WIDTH = 128
     ds_transforms = transforms.Compose([transforms.Grayscale(num_output_channels=1), 
                                         transforms.Resize((FINAL_HEIGHT, FINAL_WIDTH)),
                                         transforms.ToTensor()])
-    train_dataset = IrisDataset(files_train, labels_train, FINAL_HEIGHT, FINAL_WIDTH, ds_transforms)
-    # test_dataset = IrisDataset(files_train, labels_train)
-    # train_loader = torch.utils.data.DataLoader(train_dataset,**train_kwargs)
-    # test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
+    train_dataset = IrisDataset(files_train, labels_train, ds_transforms, rng, FINAL_HEIGHT, FINAL_WIDTH)
+    test_dataset = IrisDataset(files_test, labels_test, ds_transforms, rng, FINAL_HEIGHT, FINAL_WIDTH)
+    train_loader = DataLoader(train_dataset,**train_kwargs)
+    test_loader = DataLoader(test_dataset, **test_kwargs)
 
     model = SiameseNetwork().to(device)
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
     loss_fn = nn.BCELoss()
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
-    # for epoch in range(1, args.epochs + 1):
-    #     train_loop(train_loader, model, loss_fn, optimizer, device, **vars(args))
-    #     test_loop(test_loader, model, loss_fn, device)
-    #     scheduler.step()
+    for epoch in range(1, args.epochs + 1):
+        train_loop(train_loader, model, loss_fn, optimizer, device, **vars(args))
+        test_loop(test_loader, model, loss_fn, device)
+        scheduler.step()
 
     if args.save_model:
         torch.save(model.state_dict(), "siamese_network.pt")
